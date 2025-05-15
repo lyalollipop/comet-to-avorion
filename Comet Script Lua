@@ -1,0 +1,116 @@
+-- mixed_meteor_spawner.lua
+
+-- --- Configurações ---
+local SPAWN_INTERVAL = 3.0       -- Intervalo de tempo em segundos para tentar spawnar meteoros
+local SPAWN_COUNT_PER_ATTEMPT = 5 -- Quantos meteoros tentar spawnar por vez
+
+-- Configurações para meteoros comuns (estáticos e sem recursos)
+local NORMAL_METEOR_SIZE = 30.0   -- Tamanho dos meteoros comuns
+
+-- Configurações para cometas (rápidos e sem recursos)
+local COMET_SPEED = 500.0         -- Velocidade dos cometas (muito rápido)
+local COMET_LIFETIME_SECONDS = 45.0 -- Tempo de vida em segundos de um cometa antes de ser removido
+local COMET_CHANCE_DIVIDER = 5000  -- Chance de um meteoro virar cometa (1 em COMET_CHANCE_DIVIDER)
+                                   -- Ex: 5000 significa 1 em 5000
+local COMET_SIZE = 60.0           -- Tamanho do cometa (pode ser maior para destaque)
+
+-- Configurações gerais de spawn
+local SPAWN_DISTANCE = 500.0     -- Distância máxima do jogador para spawnar
+
+-- --- Variáveis de Controle Interno ---
+local lastSpawnTime = 0
+local activeComets = {} -- Para controlar os cometas com tempo de vida
+
+-- --- Funções ---
+
+-- Função para spawnar um único meteoro (que pode virar cometa)
+function spawnMeteor()
+    local player = Player()
+    if not player then return end
+
+    local playerSector = player.sector
+    if not playerSector then return end
+
+    local playerPos = player.position
+
+    -- Posição de spawn aleatória perto do jogador (ou no setor atual)
+    local spawnX = playerPos.x + math.random(-SPAWN_DISTANCE, SPAWN_DISTANCE)
+    local spawnY = playerPos.y + math.random(-SPAWN_DISTANCE, SPAWN_DISTANCE)
+    local spawnZ = playerPos.z + math.random(-SPAWN_DISTANCE, SPAWN_DISTANCE)
+
+    local spawnPos = Vector(spawnX, spawnY, spawnZ)
+
+    -- Decidir se este será um cometa
+    local isComet = math.random(1, COMET_CHANCE_DIVIDER) == 1
+
+    local meteorSize = isComet and COMET_SIZE or NORMAL_METEOR_SIZE
+
+    -- Criar o meteoro
+    local meteor = playerSector:createEntity(
+        spawnPos,
+        EntityType.Asteroid,
+        Rarity.Common, -- Rarity não importa para meteoros sem recursos
+        meteorSize
+    )
+
+    if meteor then
+        -- Remover todos os recursos do meteoro (comum ou cometa)
+        meteor:clearResources()
+
+        if isComet then
+            -- Gerar uma direção aleatória para o cometa
+            local direction = Vector(math.random(-1.0, 1.0), math.random(-1.0, 1.0), math.random(-1.0, 1.0)):normalized()
+            meteor.velocity = direction * COMET_SPEED
+
+            -- Adicionar o cometa à lista de ativos com tempo de expiração
+            table.insert(activeComets, {entity = meteor, expiryTime = os.time() + COMET_LIFETIME_SECONDS})
+        else
+            -- Meteoros normais ficam estáticos
+            meteor.velocity = Vector(0, 0, 0)
+        end
+    end
+end
+
+-- Função que é chamada repetidamente pelo jogo (a cada tick)
+function onUpdate(timeStep)
+    local currentTime = os.time()
+
+    -- Spawnar novos meteoros em intervalos regulares
+    if currentTime - lastSpawnTime >= SPAWN_INTERVAL then
+        for i = 1, SPAWN_COUNT_PER_ATTEMPT do
+            spawnMeteor()
+        end
+        lastSpawnTime = currentTime
+    end
+
+    -- Remover cometas expirados
+    local newActiveComets = {}
+    for i = 1, #activeComets do
+        local cometData = activeComets[i]
+        -- Se o cometa expirou ou não é mais válido, destrói
+        if cometData.expiryTime <= currentTime or not cometData.entity:isValid() then
+            if cometData.entity:isValid() then
+                cometData.entity:destroy()
+            end
+        else
+            -- Caso contrário, mantém na lista
+            table.insert(newActiveComets, cometData)
+        end
+    end
+    activeComets = newActiveComets
+end
+
+-- --- Registro de Funções no Jogo ---
+onUpdate(onUpdate)
+
+-- --- Limpeza ao Sair ---
+function onExit()
+    -- Destrói quaisquer cometas ativos remanescentes ao sair do jogo
+    for i = 1, #activeComets do
+        local cometData = activeComets[i]
+        if cometData.entity:isValid() then
+            cometData.entity:destroy()
+        end
+    end
+    activeComets = {} -- Limpa a tabela
+end
